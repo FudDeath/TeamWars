@@ -1,37 +1,27 @@
-module game::main {
-    use sui::transfer;
-    use sui::tx_context::TxContext;
-    use game::character::{Self, Character};
-    use game::dungeons;
-    use game::ocw_token::{Self, OCW};
+module ocw::main {
 
-    struct GAME has drop {}
+    use sui::coin::Coin;
 
-    fun init(witness: GAME, ctx: &mut TxContext) {
-        ocw_token::init(OCW {}, ctx);
-    }
+    use ocw::{
+        ocw::OCW,
+        character::Character,
+    };
+    
+    // @dev We need to wrap a TreasuryCap to freely mint.
+    public fun init_state() {}
 
-    public entry fun create_character(ctx: &mut TxContext) {
-        let character = character::new(ctx);
-        transfer::transfer(character, tx_context::sender(ctx));
-    }
+    public entry fun heal_character(character: &mut Character, mut payment: Coin<OCW>, ctx: &mut TxContext) {
+        let cost = character.healing_cost();
+        assert!(payment.value() >= cost, 1);
 
-    public entry fun enter_dungeon(character: &mut Character, dungeon_level: u8, payment: Coin<OCW>, ctx: &mut TxContext) {
-        dungeons::enter_dungeon(character, dungeon_level, payment, ctx);
-    }
+        let payment_split = payment.split(cost, ctx);
+        
+        transfer::public_transfer(payment_split, @0x0);
 
-    public entry fun complete_dungeon(character: &mut Character, dungeon_level: u8, ctx: &mut TxContext) {
-        dungeons::complete_dungeon(character, dungeon_level, ctx);
-    }
-
-    public entry fun heal_character(character: &mut Character, payment: Coin<OCW>, ctx: &mut TxContext) {
-        let cost = character::get_healing_cost(character);
-        assert!(coin::value(&payment) >= cost, 1);
-
-        let payment_split = coin::split(&mut payment, cost, ctx);
-        coin::burn(payment_split);
         transfer::public_transfer(payment, tx_context::sender(ctx));
 
-        character::heal(character, character::get_max_hp(character));
+        let max_hp = character.max_hp();
+
+        character.heal(max_hp);
     }
 }

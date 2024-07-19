@@ -1,0 +1,169 @@
+:root {
+  --bg-color: #1a1a2e;
+  --card-bg: #16213e;
+  --text-color: #e5e5e5;
+  --accent-color: #0f3460;
+  --button-color: #e94560;
+  --progress-bg: #2a2a4a;
+  --progress-fill: #4CAF50;
+}
+
+body, html {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  overflow-x: hidden;
+  font-size: 16px;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 20px;
+  box-sizing: border-box;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.title {
+  font-size: 2.5em;
+  font-weight: bold;
+  text-align: center;
+  color: var(--button-color);
+  margin: 0 0 20px 0;
+}
+
+.main-content {
+  display: flex;
+  flex-grow: 1;
+  gap: 20px;
+}
+
+.sidebar {
+  flex: 0 0 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dungeon-section {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.card {
+  background: var(--card-bg);
+  border-radius: 8px;
+  padding: 20px;
+  overflow: auto;
+}
+
+.card-header {
+  font-size: 1.4em;
+  font-weight: bold;
+  margin-bottom: 15px;
+  color: var(--button-color);
+}
+
+.button {
+  display: inline-block;
+  padding: 12px 20px;
+  background-color: var(--button-color);
+  color: var(--text-color);
+  text-align: center;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+  border: none;
+  font-size: 1em;
+  transition: background-color 0.3s;
+}
+
+.button:hover {
+  background-color: #c13d54;
+}
+
+.progress {
+  height: 10px;
+  background-color: var(--progress-bg);
+  border-radius: 5px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.progress-bar {
+  height: 100%;
+  background-color: var(--progress-fill);
+  width: 66%;
+}
+
+.dungeon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.dungeon-card {
+  background: var(--accent-color);
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  font-size: 1em;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.dungeon-card h3 {
+  margin: 0 0 15px 0;
+  font-size: 1.3em;
+}
+
+.dungeon-card p {
+  margin: 8px 0;
+}
+
+#dungeon-status {
+  text-align: center;
+  font-size: 1em;
+  margin-top: 15px;
+  height: 20px;
+}
+
+.bottom-row {
+  display: flex;
+  gap: 20px;
+}
+
+.bottom-row .card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.char-info p, .clan-info p {
+  margin: 8px 0;
+}
+
+@media (max-width: 768px) {
+  .main-content {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    flex: none;
+    width: 100%;
+  }
+
+  .bottom-row {
+    flex-direction: column;
+  }
+}

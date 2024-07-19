@@ -4,11 +4,10 @@ import { SuiClient } from '@mysten/sui.js/client';
 import { TransactionBlock } from '@mysten/sui.js/transactions';
 import './OCWGame.css';
 
-// Updated with the actual package ID from the deployment
-const PACKAGE_ID = '0x94bda838ec981d1bb3f9b82c94c7417adc3a54d92bd35a23a601736a0e41898d';
-
-// OCW coin type
+// Updated constants
+const PACKAGE_ID = '0xa8a3504af5ffd5b2526f93b59a1085839a3da66770529e39aa494b741b358cfd';
 const OCW_COIN_TYPE = `${PACKAGE_ID}::ocw::OCW`;
+const TREASURY_CAP_ID = '0xdd91946f21d64639de4ed890d08bcf854f810326636a8b32a189c578f745aca9';
 
 const provider = new SuiClient({ url: 'https://fullnode.testnet.sui.io' });
 
@@ -81,47 +80,66 @@ const OCWGame = () => {
     }
   };
 
+  const mintOCW = async (amount) => {
+    if (!currentAccount) return;
+    try {
+      const tx = new TransactionBlock();
+      tx.moveCall({
+        target: `${PACKAGE_ID}::ocw::mint`,
+        arguments: [
+          tx.object(TREASURY_CAP_ID),
+          tx.pure(amount),
+          tx.pure(currentAccount.address),
+        ],
+      });
+      
+      await signAndExecuteTransactionBlock({ transactionBlock: tx });
+      await fetchOCWBalance();
+    } catch (e) {
+      console.error("Error minting OCW:", e);
+    }
+  };
+
 const enterDungeon = async (level) => {
   if (!character) return;
   try {
+    const cost = [0, 100, 200, 300, 400][level - 1] * 1000000; // Convert to OCW units
     const tx = new TransactionBlock();
-    const cost = [0, 100, 200, 300, 400][level - 1];
 
-    if (cost > 0) {
-      // Fetch the Coin<OCW> objects owned by the user
-      const coins = await provider.getOwnedObjects({
-        owner: currentAccount.address,
-        filter: { StructType: OCW_COIN_TYPE },
-      });
+    // Fetch the user's OCW coins
+    const ocwCoins = await provider.getCoins({
+      owner: currentAccount.address,
+      coinType: OCW_COIN_TYPE,
+    });
 
-      if (coins.data.length === 0) {
-        throw new Error("No OCW coins available for the transaction.");
-      }
-
-      // Use the first coin for payment
-      const coinId = coins.data[0].data.objectId;
-
-      tx.moveCall({
-        target: `${PACKAGE_ID}::dungeons::enter_dungeon`,
-        arguments: [
-          tx.object(character.id),
-          tx.pure(level),
-          tx.object(coinId),
-        ],
-      });
-    } else {
-      // For free dungeon, pass a dummy coin ID
-      tx.moveCall({
-        target: `${PACKAGE_ID}::dungeons::enter_dungeon`,
-        arguments: [
-          tx.object(character.id),
-          tx.pure(level),
-          tx.object("0x0"), // Dummy coin ID for free dungeon
-        ],
-      });
+    if (ocwCoins.data.length === 0) {
+      throw new Error("No OCW coins available for the transaction.");
     }
+    
+      console.log(`Found ${ocwCoins.data.length} OCW coins`);
+      ocwCoins.data.forEach((coin, index) => {
+      console.log(`Coin ${index}: ObjectID: ${coin.coinObjectId}, Balance: ${coin.balance}`);
+      });
 
-    await signAndExecuteTransactionBlock({ transactionBlock: tx });
+    // Use the first coin and split if necessary
+    const [paymentCoin] = tx.splitCoins(tx.object(ocwCoins.data[0].coinObjectId), [tx.pure(cost)]);
+
+    // Enter the dungeon with the OCW coins
+    const [returnedCoin] = tx.moveCall({
+      target: `${PACKAGE_ID}::dungeons::enter_dungeon`,
+      arguments: [
+        tx.object(character.id),
+        tx.pure(level),
+        paymentCoin,
+      ],
+    });
+
+    // Transfer the returned coin back to the user
+    tx.transferObjects([returnedCoin], tx.pure(currentAccount.address));
+
+    // Execute the transaction
+    const result = await signAndExecuteTransactionBlock({ transactionBlock: tx });
+    console.log("Dungeon entry result:", result);
     await fetchCharacter();
     await fetchOCWBalance();
   } catch (e) {
@@ -211,7 +229,7 @@ const enterDungeon = async (level) => {
                   <p><strong>EXP:</strong> {character.exp}</p>
                   <p><strong>HP:</strong> {character.currentHp}/{character.maxHp}</p>
                   <p><strong>Injured:</strong> {character.isInjured ? 'Yes' : 'No'}</p>
-                  <p><strong>$OCW:</strong> {ocwBalance}</p>
+                  <p><strong>$OCW:</strong> {ocwBalance / 1000000}</p>
                 </>
               ) : (
                 <button onClick={createCharacter} className="button">
@@ -232,66 +250,58 @@ const enterDungeon = async (level) => {
             <div className="card">
               <div className="card-header">Dungeons</div>
               <div className="dungeon-grid">
-                <div className="dungeon-card">
-                  <h3>Novice</h3>
-                  <p><strong>Success Rate:</strong> 100%</p>
-                  <p><strong>EXP Gain:</strong> 100</p>
-                  <p><strong>$OCW Earnings:</strong> 10</p>
-                  <button className="button" onClick={() => enterDungeon(1)}>Enter Dungeon</button>
-                </div>
-
-                <div className="dungeon-card">
-                  <h3>Adept</h3>
-                  <p><strong>Success Rate:</strong> 70%</p>
-                  <p><strong>EXP Gain:</strong> 250</p>
-                  <p><strong>$OCW Earnings:</strong> 40</p>
-                  <button className="button" onClick={() => enterDungeon(2)}>Enter Dungeon</button>
-                </div>
-
-                <div className="dungeon-card">
-                  <h3>Expert</h3>
-                  <p><strong>Success Rate:</strong> 50%</p>
-                  <p><strong>EXP Gain:</strong> 450</p>
-                  <p><strong>$OCW Earnings:</strong> 80</p>
-                  <button className="button" onClick={() => enterDungeon(3)}>Enter Dungeon</button>
-                </div>
-
-                <div className="dungeon-card">
-                  <h3>Master</h3>
-                  <p><strong>Success Rate:</strong> 40%</p>
-                  <p><strong>EXP Gain:</strong> 1000</p>
-                  <p><strong>$OCW Earnings:</strong> 120</p>
-                  <button className="button" onClick={() => enterDungeon(4)}>Enter Dungeon</button>
-                </div>
-
-                <div className="dungeon-card">
-                  <h3>Legendary</h3>
-                  <p><strong>Success Rate:</strong> 20%</p>
-                  <p><strong>EXP Gain:</strong> 3000</p>
-                  <p><strong>$OCW Earnings:</strong> 160</p>
-                  <button className="button" onClick={() => enterDungeon(5)}>Enter Dungeon</button>
-                </div>
+                {[
+                  { level: 1, name: "Novice", color: "green" },
+                  { level: 2, name: "Adept", color: "yellow" },
+                  { level: 3, name: "Expert", color: "orange" },
+                  { level: 4, name: "Master", color: "red" },
+                  { level: 5, name: "Legendary", color: "purple" }
+                ].map(dungeon => (
+                  <div key={dungeon.level} className="dungeon-card">
+                    <h3>{dungeon.name}</h3>
+                    <p><strong>Success Rate:</strong> {100 - (dungeon.level - 1) * 20}%</p>
+                    <p><strong>EXP Gain:</strong> {100 * Math.pow(2, dungeon.level - 1)}</p>
+                    <p><strong>$OCW Cost:</strong> {(dungeon.level - 1) * 100}</p>
+                    <button 
+                      className={`button ${dungeon.color}`} 
+                      onClick={() => enterDungeon(dungeon.level)}
+                      disabled={!character}
+                    >
+                      Enter Dungeon
+                    </button>
+                  </div>
+                ))}
               </div>
-              <p id="dungeon-status">Select a dungeon to enter...</p>
             </div>
 
             <div className="bottom-row">
               <div className="card">
-                <div className="card-header">Solo Raid</div>
-                <button className="button" onClick={() => alert('Raid started!')}>Start Solo Raid</button>
+                <div className="card-header">Complete Dungeon</div>
+                <button 
+                  className="button" 
+                  onClick={() => completeDungeon(1)} 
+                  disabled={!character}
+                >
+                  Complete Dungeon
+                </button>
               </div>
 
               <div className="card">
-                <div className="card-header">Epoch War</div>
-                <p>Next war: <span id="countdown">12:34:56</span></p>
-                <div className="progress">
-                  <div className="progress-bar"></div>
-                </div>
+                <div className="card-header">Heal Character</div>
+                <button 
+                  className="button" 
+                  onClick={healCharacter} 
+                  disabled={!character || !character.isInjured}
+                >
+                  Heal Character
+                </button>
               </div>
 
               <div className="card">
-                <div className="card-header">Clan Management</div>
-                <button className="button" onClick={() => alert('Redirecting to clan management page...')}>Manage Clan</button>
+                <div className="card-header">Mint OCW Tokens</div>
+                <button className="button" onClick={() => mintOCW(150000000)}>
+                  Mint 150 OCW
+                </button>
               </div>
             </div>
           </div>
@@ -302,4 +312,3 @@ const enterDungeon = async (level) => {
 };
 
 export default OCWGame;
-

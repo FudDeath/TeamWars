@@ -1,271 +1,373 @@
-module clan_wars::game {
-    use sui::object::{Self, UID};
-    use sui::transfer;
-    use sui::tx_context::{Self, TxContext};
-    use sui::coin::{Self, Coin, TreasuryCap};
-    use sui::balance::{Self, Balance};
+module FW::character {
+    use sui::event;
     use sui::clock::{Self, Clock};
-    use std::option::{Self, Option};
-    use std::vector;
-    use 0x0::ocw_token::{Self, OCW_TOKEN};
+    use sui::random::{Self, Random};
+    use sui::coin::{Self, Coin, TreasuryCap};
+    use FW::ocw::OCW;
 
-    // Error codes
-    const EInsufficientFunds: u64 = 0;
-    const ECharacterInjured: u64 = 1;
-    const ECharacterBusy: u64 = 2;
+    // CONSTANTS
+    const NOVICE_DUNGEON_DURATION: u64 = 10000; // 10 seconds for testing (originally 1 hour)
+    const ADEPT_DUNGEON_DURATION: u64 = 20000; // 20 seconds for testing (originally 2 hours)
+    const EXPERT_DUNGEON_DURATION: u64 = 30000; // 30 seconds for testing (originally 3 hours)
+    const MASTER_DUNGEON_DURATION: u64 = 40000; // 40 seconds for testing (originally 4 hours)
+    const LEGENDARY_DUNGEON_DURATION: u64 = 60000; // 60 seconds for testing (originally 6 hours)
 
-    // Game constants
-    const XP_PER_LEVEL: u64 = 500;
+    const ERR_CHARACTER_LOCKED: u64 = 0;
+    const ERR_DUNGEON_TIME_NOT_ELAPSED: u64 = 1;
+    const ERR_INVALID_DUNGEON_LEVEL: u64 = 2;
+    const ERR_NOT_IN_DUNGEON: u64 = 3;
+    const ERR_ALREADY_RAIDED_TODAY: u64 = 6;
+    const ERR_ALREADY_RAIDED_SOMEONE_TODAY: u64 = 7;
+    const ERR_CANNOT_RAID_SELF: u64 = 8;
+    const ERR_CHARACTER_INJURED: u64 = 4;
+    const ERR_INSUFFICIENT_OCW: u64 = 5;
 
-    // Character struct
+    const BURN_ADDRESS: address = @0x0;
+
+    // STRUCTS
     public struct Character has key, store {
         id: UID,
         level: u64,
-        xp: u64,
+        exp: u64,
+        locked: bool,
+        last_dungeon_entry: u64,
+        current_dungeon: u8,
         max_hp: u64,
         current_hp: u64,
-        base_damage: u64,
         is_injured: bool,
-        ocw_balance: Balance<OCW_TOKEN>,
-        equipped_skills: vector<Option<Skill>>,
-        busy_until: u64,
+        ocw_balance: u64,
+        damage: u64,  // New field for character damage
+        unclaimed_ocw: u64,
+        last_raid_epoch: u64,
+        last_raided_epoch: u64,
+        last_reward_epoch: u64,
     }
 
-    // Skill struct
-    public struct Skill has key, store {
-        id: UID,
-        rarity: u8,
-        uses_left: u64,
-        damage_boost: u64,
-    }
-
-    // Dungeon struct
-    public struct Dungeon has key {
-        id: UID,
+    public struct CharacterInfo has copy, drop {
         level: u64,
-        completion_time: u64,
-        success_rate: u64,
-        xp_gain: u64,
-        skill_drop_rate: u64,
-        ocw_reward: u64,
-        entry_cost: u64,
+        exp: u64,
+        locked: bool,
+        last_dungeon_entry: u64,
+        current_dungeon: u8,
+        max_hp: u64,
+        current_hp: u64,
+        is_injured: bool,
+        ocw_balance: u64,
+        damage: u64,
+        unclaimed_ocw: u64,
+        last_raid_epoch: u64,
+        last_raided_epoch: u64,
+        last_reward_epoch: u64,
     }
 
-    fun init(ctx: &mut TxContext) {
-        create_dungeon(1, 3600000, 100, 150, 10, 50, 0, ctx);
-        create_dungeon(2, 7200000, 70, 250, 30, 200, 100, ctx);
-        create_dungeon(3, 10800000, 50, 500, 50, 400, 200, ctx);
-        create_dungeon(4, 14400000, 30, 1000, 70, 600, 300, ctx);
-        create_dungeon(5, 21600000, 20, 3000, 90, 800, 400, ctx);
+    public struct RaidResult has copy, drop {
+        attacker: address,
+        defender: address,
+        success: bool,
+        ocw_stolen: u64,
+        attacker_damage: u64,
+        attack_roll: u64,
     }
 
-    fun create_dungeon(
-        level: u64,
-        completion_time: u64,
-        success_rate: u64,
-        xp_gain: u64,
-        skill_drop_rate: u64,
-        ocw_reward: u64,
-        entry_cost: u64,
-        ctx: &mut TxContext
-    ) {
-        let dungeon = Dungeon {
-            id: object::new(ctx),
-            level,
-            completion_time,
-            success_rate,
-            xp_gain,
-            skill_drop_rate,
-            ocw_reward,
-            entry_cost,
-        };
-        transfer::share_object(dungeon);
+    public struct DungeonResult has copy, drop {
+        success: bool,
+        exp_gained: u64,
+        ocw_earned: u64,
+        hp_lost: u64,
     }
 
-    public entry fun create_character(ctx: &mut TxContext) {
+    // FUNCTIONS
+    public entry fun create_and_share(ctx: &mut TxContext) {
         let character = Character {
             id: object::new(ctx),
             level: 1,
-            xp: 0,
+            exp: 0,
+            locked: false,
+            last_dungeon_entry: 0,
+            current_dungeon: 0,
             max_hp: 100,
             current_hp: 100,
-            base_damage: 10,
             is_injured: false,
-            ocw_balance: balance::zero(),
-            equipped_skills: vector::empty(),
-            busy_until: 0,
+            ocw_balance: 0,
+            damage: 100,  // Initial damage
+            unclaimed_ocw: 0,
+            last_raid_epoch: 0,
+            last_raided_epoch: 0,
+            last_reward_epoch: 0,  // Initialize the new field
         };
-        transfer::transfer(character, tx_context::sender(ctx));
+        transfer::share_object(character);
     }
 
-	public entry fun enter_dungeon(
-	    character: &mut Character,
-	    dungeon: &Dungeon,
-	    payment: &mut Coin<OCW_TOKEN>,
-	    treasury_cap: &mut TreasuryCap<OCW_TOKEN>,
-	    clock: &Clock,
-	    ctx: &mut TxContext
-	) {
-	    assert!(!character.is_injured, ECharacterInjured);
-	    assert!(character.busy_until <= clock::timestamp_ms(clock), ECharacterBusy);
-	    assert!(coin::value(payment) >= dungeon.entry_cost, EInsufficientFunds);
-
-	    // Pay entry fee
-	    let entry_fee = coin::split(payment, dungeon.entry_cost, ctx);
-	    coin::burn(treasury_cap, entry_fee);
-
-	    // Set character as busy
-	    character.busy_until = clock::timestamp_ms(clock) + dungeon.completion_time;
-
-	    // Determine dungeon outcome
-	    if (pseudo_random(ctx) <= dungeon.success_rate) {
-		// Success
-		character.xp = character.xp + dungeon.xp_gain;
-		
-		// Add OCW reward
-		let reward_coin = coin::mint(treasury_cap, dungeon.ocw_reward, ctx);
-		balance::join(&mut character.ocw_balance, coin::into_balance(reward_coin));
-		
-		// Possibly drop a skill
-		if (pseudo_random(ctx) <= dungeon.skill_drop_rate) {
-		    let skill = create_random_skill(ctx);
-		    if (vector::length(&character.equipped_skills) < 4) {
-		        vector::push_back(&mut character.equipped_skills, option::some(skill));
-		    } else {
-		        transfer::public_transfer(skill, tx_context::sender(ctx));
-		    }
-		};
-
-		// Level up if enough XP
-		let levels_gained = character.xp / XP_PER_LEVEL;
-		if (levels_gained > 0) {
-		    character.xp = character.xp % XP_PER_LEVEL;
-		    character.level = character.level + levels_gained;
-		    character.max_hp = character.max_hp + (10 * levels_gained);
-		    character.base_damage = character.base_damage + (10 * levels_gained);
-		};
-	    } else {
-		// Failure
-		character.is_injured = true;
-		character.current_hp = character.current_hp - ((character.max_hp as u64) * dungeon.level / 10);
-	    };
-	}
-
-    public entry fun heal_character(
+    public entry fun enter_dungeon(
         character: &mut Character,
-        payment: &mut Coin<OCW_TOKEN>,
-        treasury_cap: &mut TreasuryCap<OCW_TOKEN>,
+        dungeon_level: u8,
+        clock: &Clock,
+        payment: &mut Coin<OCW>,
         ctx: &mut TxContext
     ) {
-        let healing_cost = (character.max_hp - character.current_hp) as u64;
-        assert!(coin::value(payment) >= healing_cost, EInsufficientFunds);
+        let current_time = clock::timestamp_ms(clock);
+        assert!(!character.locked, ERR_CHARACTER_LOCKED);
+        assert!(dungeon_level >= 1 && dungeon_level <= 5, ERR_INVALID_DUNGEON_LEVEL);
+        assert!(current_time >= character.last_dungeon_entry + get_dungeon_duration(character.current_dungeon), ERR_DUNGEON_TIME_NOT_ELAPSED);
+        assert!(!character.is_injured, ERR_CHARACTER_INJURED);  // This line ensures the character is not injured
+        assert!(character.current_hp == character.max_hp, ERR_CHARACTER_INJURED);  // This additional check ensures full HP
 
-        let healing_payment = coin::split(payment, healing_cost, ctx);
-        coin::burn(treasury_cap, healing_payment);
+        let entry_cost = get_dungeon_entry_cost(dungeon_level);
+        assert!(coin::value(payment) >= entry_cost, ERR_INSUFFICIENT_OCW);
 
-        character.current_hp = character.max_hp;
-        character.is_injured = false;
-    }
-
-    fun create_random_skill(ctx: &mut TxContext): Skill {
-        let rarity = (pseudo_random(ctx) % 100) + 1;
-        let (rarity, uses, damage) = if (rarity <= 60) {
-            (1, 25, 20)
-        } else if (rarity <= 85) {
-            (2, 20, 30)
-        } else if (rarity <= 95) {
-            (3, 15, 50)
-        } else if (rarity <= 99) {
-            (4, 10, 75)
-        } else {
-            (5, 5, 100)
+        if (entry_cost > 0) {
+            let paid = coin::split(payment, entry_cost, ctx);
+            transfer::public_transfer(paid, BURN_ADDRESS);
         };
 
-        Skill {
-            id: object::new(ctx),
-            rarity,
-            uses_left: uses,
-            damage_boost: damage,
+        character.locked = true;
+        character.last_dungeon_entry = current_time;
+        character.current_dungeon = dungeon_level;
+
+        emit_character_info(character);
+    }
+
+    entry fun complete_dungeon(
+        random: &Random,
+        character: &mut Character,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let current_time = clock::timestamp_ms(clock);
+        assert!(character.locked, ERR_NOT_IN_DUNGEON);
+        assert!(current_time >= character.last_dungeon_entry + get_dungeon_duration(character.current_dungeon), ERR_DUNGEON_TIME_NOT_ELAPSED);
+        
+        let mut gen = random::new_generator(random, ctx);
+        
+        let value = random::generate_u64_in_range(&mut gen, 0, 100);
+        let success = is_dungeon_success(character.current_dungeon, value);
+        let exp_gained = if (success) { get_exp_gain(character.current_dungeon) } else { 0 };
+        let ocw_earned = if (success) { get_ocw_reward(character.current_dungeon) } else { 0 };
+        let hp_lost = if (!success) { calculate_injury(character.current_dungeon, character.max_hp) } else { 0 };
+
+        if (success) {
+            level_up(character, exp_gained);
+            character.unclaimed_ocw = character.unclaimed_ocw + ocw_earned;
+        } else {
+            take_damage(character, hp_lost);
+        };
+        
+        character.locked = false;
+        character.current_dungeon = 0;
+        
+        // Set is_injured flag if character's HP is not full
+        character.is_injured = character.current_hp < character.max_hp;
+        
+        event::emit(DungeonResult {
+            success,
+            exp_gained,
+            ocw_earned,
+            hp_lost,
+        });
+        
+        emit_character_info(character);
+    }
+
+    public entry fun heal_character(character: &mut Character, payment: &mut Coin<OCW>, ctx: &mut TxContext) {
+        let missing_hp = character.max_hp - character.current_hp;
+        let healing_cost = missing_hp * 1; // 1 OCW per 1% of missing HP
+        assert!(coin::value(payment) >= healing_cost, ERR_INSUFFICIENT_OCW);
+
+        if (healing_cost > 0) {
+            let paid = coin::split(payment, healing_cost, ctx);
+            transfer::public_transfer(paid, BURN_ADDRESS);
+        };
+
+        heal(character, missing_hp);
+    }
+
+    fun heal(character: &mut Character, amount: u64) {
+        character.current_hp = character.current_hp + amount;
+        if (character.current_hp > character.max_hp) {
+            character.current_hp = character.max_hp;
+        };
+        let is_injured = character.current_hp < character.max_hp;
+        character.is_injured = is_injured;
+    }
+   
+    public entry fun claim_ocw_rewards(character: &mut Character, ctx: &mut TxContext) {
+        let current_epoch = tx_context::epoch(ctx);
+        
+        // Check if we're in a new epoch compared to when rewards were last earned
+        if (current_epoch > character.last_reward_epoch) {
+            // Transfer unclaimed rewards to the claimable balance
+            character.ocw_balance = character.ocw_balance + character.unclaimed_ocw;
+            character.unclaimed_ocw = 0;
+            
+            // Update the last claimed epoch
+            character.last_reward_epoch = current_epoch;
+        };
+
+        emit_character_info(character);
+    }
+
+    entry fun raid(
+        attacker: &mut Character,
+        defender: &mut Character,
+        random: &Random,
+        ctx: &mut TxContext
+    ) {
+        let current_epoch = tx_context::epoch(ctx);
+        
+        // Check if attacker has already raided in this epoch
+        assert!(current_epoch > attacker.last_raid_epoch, ERR_ALREADY_RAIDED_SOMEONE_TODAY);
+        
+        // Check if defender has already been raided in this epoch
+        assert!(current_epoch > defender.last_raided_epoch, ERR_ALREADY_RAIDED_TODAY);
+        
+        // Ensure attacker is not raiding themselves
+        assert!(object::id(attacker) != object::id(defender), ERR_CANNOT_RAID_SELF);
+
+        let mut gen = random::new_generator(random, ctx);
+        let attack_roll = random::generate_u64_in_range(&mut gen, 1, 100);
+        let success = attack_roll <= 50; // 50% chance of success
+
+        let mut ocw_stolen = 0;
+        let mut attacker_damage = 0;
+
+        if (success) {
+            ocw_stolen = defender.unclaimed_ocw * 30 / 100; // 30% of defender's unclaimed OCW
+            defender.unclaimed_ocw = defender.unclaimed_ocw - ocw_stolen;
+            attacker.unclaimed_ocw = attacker.unclaimed_ocw + ocw_stolen;
+        } else {
+            attacker_damage = attacker.max_hp * 50 / 100; // 50% of attacker's max HP
+            take_damage(attacker, attacker_damage);
+        };
+
+        attacker.last_raid_epoch = current_epoch;
+        defender.last_raided_epoch = current_epoch;
+
+        event::emit(RaidResult {
+            attacker: tx_context::sender(ctx),
+            defender: object::id_address(defender),
+            success,
+            ocw_stolen,
+            attacker_damage,
+            attack_roll,
+        });
+
+        emit_character_info(attacker);
+        emit_character_info(defender);
+    }
+
+    public entry fun withdraw_ocw(
+        treasury_cap: &mut TreasuryCap<OCW>,
+        character: &mut Character,
+        amount: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(character.ocw_balance >= amount, ERR_INSUFFICIENT_OCW);
+        character.ocw_balance = character.ocw_balance - amount;
+
+        // Mint new OCW coins from the treasury and transfer to the recipient
+        FW::ocw::mint(treasury_cap, amount, tx_context::sender(ctx), ctx);
+    }
+
+    // HELPER FUNCTIONS
+    fun get_dungeon_duration(dungeon_level: u8): u64 {
+        if (dungeon_level == 1) { NOVICE_DUNGEON_DURATION }
+        else if (dungeon_level == 2) { ADEPT_DUNGEON_DURATION }
+        else if (dungeon_level == 3) { EXPERT_DUNGEON_DURATION }
+        else if (dungeon_level == 4) { MASTER_DUNGEON_DURATION }
+        else if (dungeon_level == 5) { LEGENDARY_DUNGEON_DURATION }
+        else { 0 }
+    }
+
+    fun is_dungeon_success(dungeon_level: u8, random_value: u64): bool {
+        let base_rate = if (dungeon_level == 1) { 100 }
+        else if (dungeon_level == 2) { 70 }
+        else if (dungeon_level == 3) { 50 }
+        else if (dungeon_level == 4) { 30 }
+        else if (dungeon_level == 5) { 20 }
+        else { 0 };
+
+        random_value < base_rate
+    }
+
+    fun get_exp_gain(dungeon_level: u8): u64 {
+        if (dungeon_level == 1) { 150 }
+        else if (dungeon_level == 2) { 250 }
+        else if (dungeon_level == 3) { 500 }
+        else if (dungeon_level == 4) { 1000 }
+        else if (dungeon_level == 5) { 3000 }
+        else { 0 }
+    }
+
+    fun get_ocw_reward(dungeon_level: u8): u64 {
+        if (dungeon_level == 1) { 50 }
+        else if (dungeon_level == 2) { 200 }
+        else if (dungeon_level == 3) { 400 }
+        else if (dungeon_level == 4) { 600 }
+        else if (dungeon_level == 5) { 800 }
+        else { 0 }
+    }
+
+    fun calculate_injury(dungeon_level: u8, max_hp: u64): u64 {
+        if (dungeon_level == 2) { max_hp * 30 / 100 }
+        else if (dungeon_level == 3) { max_hp * 50 / 100 }
+        else if (dungeon_level == 4) { max_hp * 60 / 100 }
+        else if (dungeon_level == 5) { max_hp * 80 / 100 }
+        else { 0 }
+    }
+
+    fun take_damage(character: &mut Character, damage: u64) {
+        if (damage >= character.current_hp) {
+            character.current_hp = 0;
+        } else {
+            character.current_hp = character.current_hp - damage;
+        };
+        character.is_injured = character.current_hp < character.max_hp;
+    }
+
+    fun get_dungeon_entry_cost(dungeon_level: u8): u64 {
+        if (dungeon_level == 1) { 0 }
+        else if (dungeon_level == 2) { 100 }
+        else if (dungeon_level == 3) { 200 }
+        else if (dungeon_level == 4) { 300 }
+        else if (dungeon_level == 5) { 400 }
+        else { 0 }
+    }
+
+    fun level_up(character: &mut Character, exp_gain: u64) {
+        character.exp = character.exp + exp_gain;
+        while (character.exp >= 1000 * character.level) {
+            character.level = character.level + 1;
+            character.max_hp = character.max_hp + 20;
+            character.current_hp = character.max_hp;
+            character.damage = character.damage + 10;
         }
     }
 
-    fun pseudo_random(_ctx: &mut TxContext): u64 {
-        // This is a placeholder. In a real implementation, use a proper source of randomness
-        123
+    // GETTER FUNCTIONS
+    public fun get_character_info(character: &Character) {
+        emit_character_info(character);
     }
 
-    // Public view functions
-
-    public fun get_character_level(character: &Character): u64 {
-        character.level
+    public fun ocw_balance(character: &Character): u64 {
+        character.ocw_balance
     }
 
-    public fun get_character_xp(character: &Character): u64 {
-        character.xp
-    }
-
-    public fun get_character_hp(character: &Character): (u64, u64) {
-        (character.current_hp, character.max_hp)
-    }
-
-    public fun get_character_damage(character: &Character): u64 {
-        character.base_damage
-    }
-
-    public fun is_character_injured(character: &Character): bool {
-        character.is_injured
-    }
-
-    public fun get_character_ocw_balance(character: &Character): u64 {
-        balance::value(&character.ocw_balance)
-    }
-
-    public entry fun claim_character_rewards(
-        character: &mut Character,
-        treasury_cap: &mut TreasuryCap<OCW_TOKEN>,
-        ctx: &mut TxContext
-    ) {
-        let amount = balance::value(&character.ocw_balance);
-        let reward_balance = balance::split(&mut character.ocw_balance, amount);
-        let reward_coin = coin::from_balance(reward_balance, ctx);
-        transfer::public_transfer(reward_coin, tx_context::sender(ctx));
-    }
-}
-
-// OCW Token Module
-module 0x0::ocw_token {
-    use sui::coin::{Self, Coin, TreasuryCap};
-    use sui::tx_context::{Self, TxContext};
-    use sui::transfer;
-    use std::option;
-
-    /// One-time witness type with no fields or a single boolean field
-    public struct OCW_TOKEN has drop {}
-
-    fun init(witness: OCW_TOKEN, ctx: &mut TxContext) {
-        let (treasury_cap, metadata) = coin::create_currency(
-            witness,
-            9,
-            b"OCW",
-            b"On-Chain Clan Wars Token",
-            b"",
-            option::none(),
-            ctx
-        );
-        transfer::public_freeze_object(metadata);
-        transfer::public_transfer(treasury_cap, tx_context::sender(ctx));
-    }
-
-    public entry fun mint(
-        treasury_cap: &mut TreasuryCap<OCW_TOKEN>,
-        amount: u64,
-        recipient: address,
-        ctx: &mut TxContext
-    ) {
-        coin::mint_and_transfer(treasury_cap, amount, recipient, ctx)
-    }
-
-    public entry fun burn(treasury_cap: &mut TreasuryCap<OCW_TOKEN>, coin: Coin<OCW_TOKEN>) {
-        coin::burn(treasury_cap, coin);
+    fun emit_character_info(character: &Character) {
+        event::emit(CharacterInfo {
+            level: character.level,
+            exp: character.exp,
+            locked: character.locked,
+            last_dungeon_entry: character.last_dungeon_entry,
+            current_dungeon: character.current_dungeon,
+            max_hp: character.max_hp,
+            current_hp: character.current_hp,
+            is_injured: character.is_injured,
+            ocw_balance: character.ocw_balance,
+            damage: character.damage,
+            unclaimed_ocw: character.unclaimed_ocw,
+            last_raid_epoch: character.last_raid_epoch,
+            last_raided_epoch: character.last_raided_epoch,
+            last_reward_epoch: character.last_reward_epoch,
+        });
     }
 }
